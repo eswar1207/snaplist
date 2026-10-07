@@ -68,3 +68,11 @@ def test_empty_mask_means_no_product():
     image, _ = product_photo()
     with pytest.raises(imaging.InvalidImageError, match="no product"):
         imaging.compose_on_background(image, np.zeros(image.shape[:2], np.uint8), imaging.white_canvas(1000))
+
+
+def test_check_catches_a_product_that_is_too_small():
+    image, mask = product_photo()
+    composite = imaging.compose_on_background(image, mask, imaging.white_canvas(2000), fill=0.6)
+    report = imaging.check_main_image(composite.image, composite)
+    assert report.checks["product_fills_85_percent_or_more"] is False
+    assert report.measurements["product_fill_ratio"] == pytest.approx(0.6, abs=0.005)

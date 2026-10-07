@@ -209,7 +209,7 @@ def check_main_image(final_rgb: np.ndarray, composite: Composite, min_side: int 
 
     checks = {
         "background_pure_white": white_ratio >= 0.999,
-        "product_fills_about_85_percent": 0.80 <= fill_ratio <= 0.90,
+        "product_fills_85_percent_or_more": fill_ratio >= 0.848,  # Amazon: 85% or more (2 px rounding slack)
         "longest_side_at_least_1000px": max(width, height) >= min_side,
         "square_1_to_1": width == height,
         "product_not_cut_off": not touches_edge,

@@ -19,7 +19,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from . import imaging, metrics, pipeline
 from .config import Settings
-from .jobs import JobStore, now_ms
+from .jobs import CLAIM_LEASE_SECONDS, JobStore, now_ms
 from .ratelimit import TokenBucketLimiter
 from .storage import LocalStorage, original_key, output_key
 
@@ -51,6 +51,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         metrics.JOBS_REJECTED.labels(reason).inc()
         metrics.API_REQUESTS.labels("submit", str(status)).inc()
         return HTTPException(status_code=status, detail=detail, headers=headers)
+
+    def overloaded(tier: str) -> HTTPException:
+        return reject(503, "overloaded", f"the {tier} queue is full; try again soon", {"Retry-After": "5"})
 
     def existing_job_response(job_id: str, reason: str) -> JSONResponse:
         metrics.JOBS_REUSED.labels(reason).inc()
@@ -124,21 +127,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     store.r.set(idem_key, f"{duplicate_job['id']}|{fingerprint}", ex=settings.dedupe_ttl_seconds)
                 return existing_job_response(duplicate_job["id"], "duplicate_upload")
 
-        # 5. Load shedding: refuse new work early instead of letting the queue grow without limit.
+        # 5. Load shedding, fast path: refuse new work early instead of letting the
+        #    queue grow without limit. Step 7 re-checks atomically, so the limit is exact.
         if store.open_jobs(tier) >= settings.max_open_jobs_per_tier:
-            raise reject(503, "overloaded", f"the {tier} queue is full; try again soon", {"Retry-After": "5"})
+            raise overloaded(tier)
 
-        # 6. Claim the dedupe and idempotency keys (SET NX) so concurrent identical
-        #    requests create only one job.
+        # 6. Claim the dedupe and idempotency keys (SET NX GET) so concurrent identical
+        #    requests create only one job. A claim is a short lease until the job exists.
         job_id = uuid.uuid4().hex
-        dedupe_claim = store.claim(dedupe_key, job_id, settings.dedupe_ttl_seconds)
+        dedupe_claim = store.claim(dedupe_key, job_id)
         if not dedupe_claim.claimed:
-            winner = store.get(dedupe_claim.existing or "")
-            if winner and winner.get("state") != "failed":
-                return existing_job_response(winner["id"], "duplicate_upload")
-            store.r.set(dedupe_key, job_id, ex=settings.dedupe_ttl_seconds)  # previous attempt failed: retry it
+            winner = store.get(dedupe_claim.existing)
+            if winner is None or winner.get("state") != "failed":
+                # Done, running, or being created right now by an identical request.
+                return existing_job_response(dedupe_claim.existing, "duplicate_upload")
+            store.r.set(dedupe_key, job_id, ex=CLAIM_LEASE_SECONDS)  # the earlier job failed: try again
         if idem_key:
-            idem_claim = store.claim(idem_key, f"{job_id}|{fingerprint}", settings.dedupe_ttl_seconds)
+            idem_claim = store.claim(idem_key, f"{job_id}|{fingerprint}")
             if not idem_claim.claimed:
                 store.release(dedupe_key)
                 previous_job, _, previous_fp = (idem_claim.existing or "").partition("|")
@@ -146,7 +151,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     raise reject(422, "idempotency_conflict", "Idempotency-Key was already used with a different request")
                 return existing_job_response(previous_job, "idempotency_key")
 
-        # 7. Store the original photo, then create the job and enqueue it atomically.
+        # 7. Store the original photo, then (atomically) re-check the limit, create the job and enqueue it.
         key = original_key(job_id, EXTENSIONS[info.format])
         job = {
             "id": job_id, "seller_id": x_seller_id, "tier": tier, "model": settings.tier_models[tier],
@@ -154,13 +159,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "content_sha256": content_sha256, "extras": ",".join(extras), "fault": fault or "",
             "width": str(info.width), "height": str(info.height), "format": info.format,
         }
+        accepted = False
         try:
             storage.put(key, data)
-            store.create_and_enqueue(job, settings.job_ttl_seconds)
-        except Exception:
-            store.release(*(k for k in (dedupe_key, idem_key) if k))
-            storage.delete(key)
-            raise
+            accepted = store.create_and_enqueue(
+                job, settings.job_ttl_seconds, settings.max_open_jobs_per_tier,
+                claims=tuple(k for k in (dedupe_key, idem_key) if k), claim_ttl_seconds=settings.dedupe_ttl_seconds)
+        finally:
+            if not accepted:  # an error, or the queue filled up since step 5: undo everything
+                store.release(*(k for k in (dedupe_key, idem_key) if k))
+                storage.delete(key)
+        if not accepted:
+            raise overloaded(tier)
 
         metrics.JOBS_SUBMITTED.labels(tier).inc()
         metrics.API_REQUESTS.labels("submit", "202").inc()

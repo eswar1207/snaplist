@@ -47,3 +47,25 @@ def test_large_photos_are_shrunk_before_processing():
     from tests.photos import to_jpeg
     prepared = pipeline.prepare(to_jpeg(image), max_side=2048)
     assert max(prepared.shape[:2]) == 2048
+
+
+def test_prepared_model_goes_to_a_cache_folder_when_the_model_folder_is_read_only(tmp_path, monkeypatch):
+    from pathlib import Path
+    import shutil
+    from snaplist import model
+
+    source = tmp_path / "read-only-models" / "u2netp.onnx"
+    source.parent.mkdir()
+    shutil.copy(Path(__file__).resolve().parent.parent / "models" / "u2netp.onnx", source)
+    real = model.make_batch_dynamic
+
+    def refuse_model_folder(src, dst):
+        if dst.parent == source.parent:
+            raise PermissionError("read-only file system")
+        real(src, dst)
+
+    monkeypatch.setattr(model, "make_batch_dynamic", refuse_model_folder)
+    monkeypatch.setattr(model.tempfile, "gettempdir", lambda: str(tmp_path / "tmp"))
+    prepared = model.prepare_model(source)
+    assert prepared == tmp_path / "tmp" / "snaplist-models" / "u2netp.dynamic-batch.onnx"
+    assert model.prepare_model(source) == prepared  # second start reuses it

@@ -14,6 +14,9 @@ Why Redis Streams for the queue: a consumer group gives each job to one worker,
 keeps it in a "pending" list until the worker acknowledges it (XACK), and lets
 another worker take over a job whose worker died (XAUTOCLAIM). That is
 at-least-once delivery; the job state check below makes repeated delivery harmless.
+
+(For Redis Cluster, the keys one script touches would need a shared hash tag,
+for example "snaplist:{standard}:...", so they live on the same shard.)
 """
 
 from __future__ import annotations
@@ -29,6 +32,9 @@ GROUP = "workers"
 DLQ_STREAM = f"{PREFIX}dlq"
 TERMINAL_STATES = {"succeeded", "failed"}
 STREAM_MAX_LEN = 100_000  # approximate trim so the stream cannot grow forever
+# A dedupe/idempotency claim is first a short lease. If the API server dies before
+# the job exists, the claim frees itself quickly instead of blocking retries for a day.
+CLAIM_LEASE_SECONDS = 60
 
 # Moves a job to a final state at most once and decrements the open-jobs counter
 # in the same atomic step. Two workers finishing the same job (after a takeover)
@@ -40,6 +46,28 @@ if not state or state == 'succeeded' or state == 'failed' then
 end
 redis.call('HSET', KEYS[1], unpack(ARGV))
 redis.call('DECR', KEYS[2])
+return 1
+"""
+
+
+# Admission and enqueue in one atomic step: refuse if the tier already has
+# `limit` open jobs, otherwise create the job record, count it and queue it.
+# Checking and counting in separate commands let concurrent requests overshoot
+# the limit (the overload benchmark accepted 62 jobs with a limit of 50).
+# KEYS[4...] are the request's dedupe/idempotency claims: they were taken as a
+# short lease and now get their full lifetime, in the same atomic step.
+_ENQUEUE_SCRIPT = """
+local open = tonumber(redis.call('GET', KEYS[2]) or '0')
+if open >= tonumber(ARGV[1]) then
+  return 0
+end
+redis.call('HSET', KEYS[1], unpack(ARGV, 6))
+redis.call('EXPIRE', KEYS[1], ARGV[2])
+redis.call('INCR', KEYS[2])
+redis.call('XADD', KEYS[3], 'MAXLEN', '~', ARGV[3], '*', 'job_id', ARGV[4])
+for i = 4, #KEYS do
+  redis.call('EXPIRE', KEYS[i], ARGV[5])
+end
 return 1
 """
 
@@ -71,6 +99,7 @@ class JobStore:
         self.r = client
         self.tiers = tiers
         self._finish = self.r.register_script(_FINISH_SCRIPT)
+        self._enqueue = self.r.register_script(_ENQUEUE_SCRIPT)
 
     # ---- setup ---------------------------------------------------------
     def ensure_queues(self) -> None:
@@ -82,12 +111,11 @@ class JobStore:
                     raise
 
     # ---- claims for dedupe and idempotency -----------------------------
-    def claim(self, key: str, value: str, ttl_seconds: int) -> Claim:
-        """SET NX: the first request wins; later ones learn the existing value."""
-        if self.r.set(key, value, nx=True, ex=ttl_seconds):
-            return Claim(True, None)
-        existing = self.r.get(key)
-        return Claim(False, existing.decode() if existing else None)
+    def claim(self, key: str, value: str, ttl_seconds: int = CLAIM_LEASE_SECONDS) -> Claim:
+        """SET NX GET (Redis 7+): the first request wins, and a later one gets the
+        winner's value in the same atomic step (no gap between "set failed" and "read")."""
+        existing = self.r.set(key, value, nx=True, ex=ttl_seconds, get=True)
+        return Claim(existing is None, existing.decode() if existing is not None else None)
 
     def release(self, *keys: str) -> None:
         if keys:
@@ -98,15 +126,18 @@ class JobStore:
         value = self.r.get(open_key(tier))
         return int(value) if value else 0
 
-    def create_and_enqueue(self, job: dict[str, str], ttl_seconds: int) -> None:
-        """Store the job record and put it on its tier's queue in one transaction."""
-        key = job_key(job["id"])
-        pipe = self.r.pipeline(transaction=True)
-        pipe.hset(key, mapping=job)
-        pipe.expire(key, ttl_seconds)
-        pipe.incr(open_key(job["tier"]))
-        pipe.xadd(stream_key(job["tier"]), {"job_id": job["id"]}, maxlen=STREAM_MAX_LEN, approximate=True)
-        pipe.execute()
+    def create_and_enqueue(self, job: dict[str, str], ttl_seconds: int, max_open: int,
+                           claims: tuple[str, ...] = (), claim_ttl_seconds: int = 0) -> bool:
+        """Create the job record and queue it, atomically, unless the tier is full.
+
+        Returns False (and changes nothing) if the tier already has `max_open` open jobs.
+        On success the given claim keys are extended to `claim_ttl_seconds`.
+        """
+        fields = [item for pair in job.items() for item in pair]
+        return bool(self._enqueue(
+            keys=[job_key(job["id"]), open_key(job["tier"]), stream_key(job["tier"]), *claims],
+            args=[max_open, ttl_seconds, STREAM_MAX_LEN, job["id"], claim_ttl_seconds, *fields],
+        ))
 
     def get(self, job_id: str) -> dict[str, str] | None:
         raw = self.r.hgetall(job_key(job_id))

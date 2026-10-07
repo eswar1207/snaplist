@@ -3,6 +3,8 @@
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+import pytest
+
 from snaplist.jobs import DLQ_STREAM
 from snaplist.ratelimit import TokenBucketLimiter
 from tests.conftest import wait_for_state
@@ -43,7 +45,7 @@ def test_only_the_main_image_is_made_unless_extras_are_asked_for(make_client, ru
     assert set(job["outputs"]) == {"main.jpg"}
 
 
-def test_same_photo_twice_reuses_the_first_job(make_client):
+def test_same_photo_twice_reuses_the_first_job(make_client, redis_client):
     client = make_client()
     first = submit(client, photo_bytes(seed=2))
     again = submit(client, photo_bytes(seed=2))
@@ -52,6 +54,9 @@ def test_same_photo_twice_reuses_the_first_job(make_client):
     assert again.status_code == 200 and again.json()["job_id"] == first.json()["job_id"]
     assert again.headers["X-SnapList-Reused"] == "duplicate_upload"
     assert other_seller.status_code == 202  # sellers never share each other's results
+    # The claim started as a 60 s lease and now lives as long as the dedupe window.
+    ttls = [redis_client.ttl(key) for key in redis_client.scan_iter("snaplist:dedupe:*")]
+    assert len(ttls) == 2 and min(ttls) > 3600
 
 
 def test_idempotency_key_replay_and_conflict(make_client):
@@ -63,15 +68,25 @@ def test_idempotency_key_replay_and_conflict(make_client):
     assert conflict.status_code == 422
 
 
-def test_concurrent_identical_requests_create_exactly_one_job(make_client, redis_client):
+@pytest.mark.parametrize("key", ["retry-storm-01", None], ids=["with-idempotency-key", "without-key"])
+def test_concurrent_identical_requests_create_exactly_one_job(make_client, redis_client, key):
     client = make_client()
     data = photo_bytes(seed=5)
     with ThreadPoolExecutor(max_workers=10) as pool:
-        responses = list(pool.map(lambda _: submit(client, data, key="retry-storm-01"), range(10)))
+        responses = list(pool.map(lambda _: submit(client, data, key=key), range(10)))
     job_ids = {r.json()["job_id"] for r in responses}
     assert len(job_ids) == 1
     assert sorted(r.status_code for r in responses).count(202) == 1
     assert int(redis_client.get("snaplist:open:standard")) == 1
+
+
+def test_queue_limit_is_exact_under_concurrent_uploads(make_client, redis_client):
+    client = make_client(max_open_jobs_per_tier=5)  # no worker running, so jobs stay open
+    photos = [photo_bytes(seed=60 + i) for i in range(20)]
+    with ThreadPoolExecutor(max_workers=20) as pool:
+        codes = list(pool.map(lambda p: submit(client, p).status_code, photos))
+    assert codes.count(202) == 5 and codes.count(503) == 15
+    assert int(redis_client.get("snaplist:open:standard")) == 5
 
 
 def test_bad_uploads_are_rejected(make_client):

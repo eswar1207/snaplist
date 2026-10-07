@@ -14,6 +14,7 @@ deployment run several images in one call; on CPU we measured no gain
 from __future__ import annotations
 
 import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -69,6 +70,29 @@ def make_batch_dynamic(src: Path, dst: Path) -> None:
     onnx.save(model, str(dst))
 
 
+def prepare_model(source: Path) -> Path:
+    """Return the batch-dynamic copy of `source`, creating it on first use.
+
+    It is stored next to the original. If that folder is read-only (for example
+    a container that runs as a non-root user), it goes to a cache folder in the
+    system temp directory instead. The file is written under a temporary name and
+    renamed, so two workers starting at the same moment never read half a file.
+    """
+    for folder in (source.parent, Path(tempfile.gettempdir()) / "snaplist-models"):
+        dynamic = folder / f"{source.stem}.dynamic-batch.onnx"
+        if dynamic.exists() and dynamic.stat().st_mtime >= source.stat().st_mtime:
+            return dynamic
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            partial = folder / f"{source.stem}.dynamic-batch.{os.getpid()}.part.onnx"
+            make_batch_dynamic(source, partial)
+            partial.replace(dynamic)
+            return dynamic
+        except PermissionError:
+            continue
+    raise PermissionError(f"cannot write the prepared model for {source}")
+
+
 class Segmenter:
     """Runs one segmentation model. One instance per worker process."""
 
@@ -79,9 +103,7 @@ class Segmenter:
             raise FileNotFoundError(
                 f"model file {source} not found; run scripts/download_models.py first"
             )
-        dynamic = model_dir / f"{source.stem}.dynamic-batch.onnx"
-        if not dynamic.exists() or dynamic.stat().st_mtime < source.stat().st_mtime:
-            make_batch_dynamic(source, dynamic)
+        dynamic = prepare_model(source)
         options = ort.SessionOptions()
         # One thread per worker process: we scale by adding processes, so they
         # should not fight each other for the same cores.

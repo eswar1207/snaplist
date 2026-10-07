@@ -17,7 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from snaplist.model import MODEL_SPECS  # noqa: E402
+from snaplist.model import MODEL_SPECS, prepare_model  # noqa: E402
 
 SHA256 = {
     "u2netp": "309c8469258dda742793dce0ebea8e6dd393174f89934733ecc8b14c76f4ddd8",
@@ -46,6 +46,7 @@ def main() -> None:
             continue
         path = target_dir / spec.file
         if path.exists() and sha256_of(path) == SHA256[name]:
+            prepare_model(path)
             print(f"{name}: already present")
             continue
         print(f"{name}: downloading {spec.download_url}")
@@ -56,6 +57,7 @@ def main() -> None:
             tmp.unlink()
             sys.exit(f"{name}: checksum mismatch (got {actual}); refusing to use this file")
         tmp.replace(path)
+        prepare_model(path)  # done here so a read-only container never has to write it
         print(f"{name}: ok ({path.stat().st_size / 1e6:.1f} MB)")
 
 
