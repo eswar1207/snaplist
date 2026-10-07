@@ -1,27 +1,27 @@
 {
   "scenario": "api_accept",
-  "recorded_at": "2026-10-07T16:39:09+0000",
+  "recorded_at": "2026-10-07T16:58:25+0000",
   "environment": {
     "cpus": 2,
     "ram_gb": 7.8,
     "python": "3.13.16",
     "os": "Linux-6.18.44-fc-v77-x86_64-with-glibc2.39",
     "load_average_at_start": [
-      1.08,
-      1.68,
-      1.33
+      1.18,
+      1.73,
+      1.52
     ]
   },
   "uploads": 400,
   "concurrency": 32,
   "mean_photo_kb": 375,
   "accepted": 400,
-  "uploads_per_second": 225.7,
+  "uploads_per_second": 198.6,
   "accept_ms": {
-    "p50": 136.8,
-    "p95": 221.7,
-    "p99": 267.8,
-    "max": 277.8,
+    "p50": 154.0,
+    "p95": 238.7,
+    "p99": 296.8,
+    "max": 324.7,
     "count": 400
   }
 }

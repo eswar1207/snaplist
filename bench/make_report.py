@@ -107,26 +107,28 @@ Uploads arrive at a steady {data['arrival_per_minute']:.0f} per minute for {data
        [[jobs['succeeded'], ms(e2e['p50']), ms(e2e['p95']), ms(e2e['p99']), ms(wait['p50']), ms(wait['p95']),
          ms(data['upload_ms']['p50'])]])}
 
-With spare capacity, a seller gets the main image back in about a second.
+With spare capacity there is almost no queueing: 99% of sellers get the main
+image back within {ms(e2e['p99'])} of uploading.
 """
 
 
 def section_chaos(data: dict) -> str:
-    taken = data["taken_over_end_to_end_ms"]
-    return f"""## 5. Killing a worker in the middle of a run
+    kills = ", ".join(f"{t:.0f} s" for t in data["kill_times_after_first_upload_s"])
+    return f"""## 5. Killing workers in the middle of a run
 
-Two workers, {data['jobs']} jobs, visibility timeout {data['visibility_timeout_ms'] / 1000:.0f} s. One worker is killed
-with `SIGKILL` (no clean-up, like a machine dying) {data['worker_killed_after_ms'] / 1000:.0f} s after the first upload.
+Two workers, {data['jobs']} jobs uploaded at once, visibility timeout {data['visibility_timeout_ms'] / 1000:.0f} s.
+A busy worker is killed with `SIGKILL` (no clean-up, like a machine dying)
+{data['workers_killed']} times, at {kills} after the first upload, and a replacement
+worker is started each time (what an orchestrator does when a container dies).
 
-{table(["Jobs", "Succeeded", "Failed", "Lost", "Taken over by the other worker", "Still pending after the run"],
+{table(["Jobs", "Succeeded", "Failed", "Lost", "Taken over after a kill", "Still pending after the run", "Images / min"],
        [[data['jobs'], data['succeeded'], data['failed'], data['lost_jobs'], data['jobs_taken_over'],
-         data['pending_after_run']]])}
+         data['pending_after_run'], f"{data['images_per_minute']:.0f}"]])}
 
-The job that was in progress on the killed worker stayed in the Redis Streams
-pending list. After the visibility timeout the surviving worker claimed it
-with `XAUTOCLAIM` and finished it (end-to-end p50 for taken-over jobs:
-{ms(taken['p50'])}). Nothing was lost and nothing was processed into a
-duplicate result.
+The {data['jobs_taken_over']} jobs that were in progress on the killed workers (a worker takes one
+job at a time) stayed in the Redis Streams pending list. After the visibility
+timeout another worker claimed each of them with `XAUTOCLAIM` and finished it
+on attempt 2. Nothing was lost and nothing was left pending.
 """
 
 
@@ -143,6 +145,19 @@ def section_overload(data: dict) -> str:
 
 Rejected requests get a quick `503` with `Retry-After: 5` instead of waiting in
 an ever-growing queue, and every accepted job still finishes.
+{before_fix_note()}"""
+
+
+def before_fix_note() -> str:
+    before = load("history/overload_before_atomic_admission")
+    if not before:
+        return ""
+    return f"""
+The first version of this benchmark found a bug: with the same settings it
+accepted **{before['accepted']} jobs against a limit of {before['max_open_jobs']}**, because the API checked the
+counter and incremented it in two separate steps. Now both happen in one Lua
+script (see DESIGN.md, 5.11). The old result is kept in
+`benchmarks/results/history/`.
 """
 
 

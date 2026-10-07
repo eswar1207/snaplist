@@ -14,8 +14,9 @@ guess a number.
 > Uploads are accepted in milliseconds and processed by workers through a
 > Redis Streams queue, with at-least-once delivery, idempotent uploads, per-seller
 > rate limits and load shedding. I measured everything: one CPU worker does
-> about ⟨82⟩ images a minute, and when I kill a worker in the middle of a run,
-> no job is lost.
+> about 87 images a minute, a seller gets the main image back in under a
+> second at normal load, and when I killed workers in the middle of a run, no
+> job was lost.
 
 ## 2. The 2-minute walk-through (draw this on the whiteboard)
 
@@ -29,17 +30,20 @@ guess a number.
 
 | What | Number |
 | --- | --- |
-| Model alone, standard tier (U²-Net-p, 1 core) | ≈ 470 ms per image |
-| Model alone, high tier (IS-Net, 1 core) | ≈ 3,000 ms per image (6.4× slower) |
-| Batching on CPU | no gain (470 ms alone vs 476–526 ms per image in batches) |
-| One worker, main image only | ⟨82⟩ images/min |
-| Two workers (2 cores) | ⟨…⟩ images/min |
-| Three workers on 2 cores | ⟨…⟩ images/min — no gain, CPU-bound |
-| Time per job inside a worker | decode ⟨21⟩ ms, model ⟨492⟩ ms, render ⟨192⟩ ms, store ⟨1⟩ ms |
-| Upload accepted (API alone) | p50 ⟨…⟩ ms, ⟨…⟩ uploads/s |
-| Worker killed mid-run | ⟨…⟩ jobs taken over, 0 lost |
-| Overload (300 uploads, queue limit 50) | ⟨…⟩ accepted, ⟨…⟩ fast `503`s |
-| Tests | 26, against a real Redis server and real worker processes |
+| Model alone, standard tier (U²-Net-p, 1 core) | 473 ms per image |
+| Model alone, high tier (IS-Net, 1 core) | 3,000 ms per image (about 6× slower) |
+| Batching on CPU | no gain (473 ms alone vs 478–487 ms per image in batches) |
+| One worker, main image only | 87 images/min |
+| Two workers (2 cores) | 161 images/min |
+| Three workers on 2 cores | 159 images/min — no gain, CPU-bound |
+| Time per job inside a worker (1 worker) | decode 16 ms, model 479 ms, render 181 ms, store 1 ms |
+| Steady load, 113 uploads/min (70% of capacity) | end-to-end p50 725 ms, p95 811 ms, p99 846 ms |
+| Upload accepted at steady load | p50 9 ms |
+| API alone, 32 uploads in flight | 199 uploads/s, p50 154 ms |
+| 4 workers killed with `SIGKILL` (120 jobs) | 4 in-flight jobs taken over, 0 lost |
+| Overload (300 uploads, queue limit 50) | exactly 50 accepted, 250 fast `503`s (62 before the fix) |
+| B-roll video | 1.6 s to make a 5 s clip |
+| Tests | 30, against a real Redis server and real worker processes |
 
 ## 4. Questions you will likely get
 
@@ -53,9 +57,9 @@ work, failures) and the result is easy to check (the rules are measurable).
 
 **Q2. What exactly does "compliant" mean in your code?**
 Five checks on the final JPEG: background pixels are exactly RGB 255 (at least
-99.9% of them, ignoring an 8 px band next to the product), product's longest
-side is 85% of the frame, image at least 1000 px, square, and the product does
-not touch the edge.
+99.9% of them, ignoring an 8 px band next to the product), the product's
+longest side covers 85% or more of the frame (I place it at exactly 85%), image
+at least 1000 px, square, and the product does not touch the edge.
 
 ### About the API
 
@@ -129,27 +133,43 @@ fails at once, because retrying cannot help.
 Two ways. A test starts a real worker process with a fault flag that makes it
 call `os._exit(17)` in the middle of a job, checks the job is stuck in
 "processing", then starts a second worker and checks the job succeeds on
-attempt 2 with nothing left pending. And the chaos benchmark kills one of two
-workers with `SIGKILL` during a run of 80 jobs: ⟨…⟩ jobs were taken over and 0
-were lost.
+attempt 2 with nothing left pending. And the chaos benchmark kills a busy
+worker with `SIGKILL` four times during a run of 120 jobs, starting a
+replacement each time: the 4 in-flight jobs were taken over and 0 were lost.
 
 **Q15. How does load shedding work?**
-An open-jobs counter per tier: `INCR` in the same transaction that enqueues,
-`DECR` in the finish script. If it is at the limit, the API answers `503` with
-`Retry-After` before storing anything. In the overload benchmark, ⟨…⟩ of 300
-uploads were rejected in about ⟨…⟩ ms each, and every accepted job finished.
+An open-jobs counter per tier: `INCR` in the script that enqueues, `DECR` in
+the finish script. If it is at the limit, the API answers `503` with
+`Retry-After`. In the overload benchmark (300 uploads at once, limit 50), 250
+were rejected (p50 76 ms at the client, with 32 requests in flight), exactly
+50 were accepted, and all 50 finished.
 
 **Q16. Isn't there a race between checking the counter and incrementing it?**
-Yes, a small one: two API servers can both see 499 and both enqueue, so the
-queue can go a little over the limit. That is fine for a soft limit. If it had
-to be exact, I would move the check and the increment into one Lua script.
+There was, and my overload benchmark caught it: with a limit of 50 it accepted
+62 jobs, because 32 requests in flight all passed the check before any of them
+incremented. I moved the check and the increment into the same Lua script that
+creates and enqueues the job. Redis runs a script atomically, so the limit is
+now exact (re-run: exactly 50 accepted). A test sends 20 uploads at once with a limit
+of 5 and expects exactly 5 accepted. I kept the cheap check at the start as a
+fast path, so most extra requests are refused before anything is written.
+
+**Q16b. Tell me about another concurrency bug.**
+Ten identical uploads at the same moment, without an `Idempotency-Key`,
+sometimes created two jobs (the test failed 2 of 8 runs). The request that
+lost `SET NX` then read the winner's job record, but the winner had not
+created it yet; it was still saving the photo. My code took "no record" to
+mean "no job" and started a second one. The fix: `SET NX GET` returns the
+winner's id in the same atomic step, and "no record yet" now means "being
+created", so the loser returns the winner's job. I also made the claim a
+60-second lease that the enqueue script extends, so a crashed API server cannot
+block retries for a whole day. After the fix the test passed in every run.
 
 ### About scaling
 
 **Q17. How do you handle 10× traffic?**
 Add API servers (stateless) and add workers. Throughput grows with CPU cores:
-⟨…⟩ images/min with 1 worker, ⟨…⟩ with 2 on 2 cores, but 3 workers on 2 cores
-gave no more. So: one worker per core, and autoscale on queue depth.
+87 images/min with 1 worker, 161 with 2 on 2 cores, but 3 workers on 2 cores
+gave no more (159). So: one worker per core, and autoscale on queue depth.
 
 **Q18. Autoscale on what metric?**
 Expected wait = open jobs ÷ (workers × images per worker per minute). If it
@@ -159,9 +179,9 @@ here: a busy worker is always at 100%, whether the queue is empty or huge.
 **Q19. What breaks first at 100×?**
 Moving photo bytes through the API servers. I would let sellers upload
 straight to S3 with a pre-signed URL and send only the key to the API. Next,
-Redis: each job is about ⟨15–20⟩ Redis commands, so one instance is fine to
-thousands of jobs per second; after that, shard the streams by seller or move
-the queue to SQS.
+Redis: each job is about 10 round trips to Redis (5 in the API, 5 in the
+worker), so one instance should be fine to thousands of jobs per second;
+after that, shard the streams by seller or move the queue to SQS.
 
 **Q20. Would a GPU help?**
 For the high tier, yes: IS-Net is 3 s per image on a CPU core. On a GPU,
@@ -176,15 +196,16 @@ same small interface (put, get, exists, delete), so only that class changes.
 ### About performance
 
 **Q22. You said batching did not help. Why?**
-I measured it: 470 ms per image alone, 476–526 ms per image in batches of 2 to
-8. A convolution network on one CPU core is compute-bound: the core is already
+I measured it: 473 ms per image alone, 478–487 ms per image in batches of 2
+to 8. A convolution network on one CPU core is compute-bound: the core is already
 busy, so putting more images in one call does the same work and only adds
 waiting. On a GPU, one image does not fill the hardware, so batching helps.
 I kept the code but set `batch_size = 1`.
 
 **Q23. Where does the time go in one job?**
-Model ⟨≈ 490⟩ ms, rendering ⟨≈ 190⟩ ms (compose, JPEG encode, decode for the
-check), decode ⟨≈ 20⟩ ms, storing ⟨≈ 1⟩ ms. The model is about 70%.
+With one worker: model 479 ms, rendering 181 ms (compose, JPEG encode,
+decode again for the check), decode 16 ms, storing under 1 ms. The model is
+about 70% of the work. A B-roll video, when asked for, adds about 1.6 s.
 
 **Q24. What did you optimise?**
 Three things, each measured: (1) shrink photos to 2048 px right after
@@ -192,11 +213,11 @@ decoding, (2) blend only the product's area instead of the full 2000 × 2000
 canvas, (3) cache the studio backgrounds per worker because they never change.
 
 **Q25. Why is your end-to-end time in the burst test so long?**
-Because 120 uploads arrive in about 2 seconds and one worker does ⟨82⟩ a
-minute. The last job waits about a minute and a half in the queue. Processing
-time per job is under a second; the rest is queue wait. In the steady-load
-test, at 70% of capacity, the p95 is ⟨…⟩ s. That is why the autoscaling
-metric is queue wait, not CPU.
+Because all 120 uploads arrive in about half a second and one worker does 87
+a minute, so the last job waits about 80 seconds in the queue. Processing time
+per job is under a second; the rest is queue wait. In the steady-load test, at
+70% of capacity, the p99 is 846 ms. That is why the autoscaling metric is
+queue wait, not CPU.
 
 ### About the image and the model
 
@@ -228,9 +249,10 @@ applies the EXIF orientation first. There is a test for it.
 ### About testing and quality
 
 **Q30. How did you test it?**
-26 tests with pytest. Unit tests for image steps. Integration tests start a
+30 tests with pytest. Unit tests for image steps. Integration tests start a
 real `redis-server` and real worker processes: end-to-end job, dedupe,
-idempotency replay and conflict, 10 concurrent identical uploads, bad uploads,
+idempotency replay and conflict, 10 concurrent identical uploads (with and
+without a key), an exact queue limit under 20 concurrent uploads, bad uploads,
 rate limit, load shedding, retry, dead-letter queue, crashed worker takeover.
 No Redis mocks, because the bugs I worry about live in Redis behaviour.
 
@@ -266,6 +288,7 @@ does not help on CPU." Then be ready to explain any file line by line.
 | Frugality | CPU-only by default, small 4.6 MB model for the standard tier, batching switched off after measuring that it costs more. |
 | Invent and Simplify | Redis does queue, rate limit and dedupe, so one system to run instead of three. |
 | Are Right, A Lot | Expected batching to help; measured it; it did not; changed the default and wrote down why. |
+| Dive Deep (2) | The overload benchmark accepted 62 jobs against a limit of 50: found the check-then-act race, made it one atomic Lua script, added a test. |
 
 ## 6. Study plan before the interview
 

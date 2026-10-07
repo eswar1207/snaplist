@@ -1,15 +1,15 @@
 {
   "scenario": "steady_load",
-  "recorded_at": "2026-10-07T16:35:30+0000",
+  "recorded_at": "2026-10-07T16:55:01+0000",
   "environment": {
     "cpus": 2,
     "ram_gb": 7.8,
     "python": "3.13.16",
     "os": "Linux-6.18.44-fc-v77-x86_64-with-glibc2.39",
     "load_average_at_start": [
-      2.47,
-      2.25,
-      1.38
+      2.16,
+      2.03,
+      1.53
     ]
   },
   "workers": 2,
@@ -17,9 +17,9 @@
   "duration_s": 120,
   "upload_ms": {
     "p50": 9.3,
-    "p95": 16.0,
-    "p99": 18.9,
-    "max": 28.1,
+    "p95": 12.7,
+    "p99": 15.7,
+    "max": 18.1,
     "count": 226
   },
   "jobs": {
@@ -28,24 +28,24 @@
     "failed": 0,
     "images_per_minute": 112.8,
     "end_to_end_ms": {
-      "p50": 741.0,
-      "p95": 3441.5,
-      "p99": 4206.0,
-      "max": 4481,
+      "p50": 725.0,
+      "p95": 811.2,
+      "p99": 845.8,
+      "max": 877,
       "count": 226
     },
     "queue_wait_ms": {
       "p50": 1.0,
-      "p95": 2382.0,
-      "p99": 3142.5,
-      "max": 3425,
+      "p95": 3.0,
+      "p99": 5.8,
+      "max": 8,
       "count": 226
     },
     "stage_median_ms": {
-      "decode_ms": 24.2,
-      "main_ms": 178.5,
-      "model_ms": 503.0,
-      "render_ms": 197.5,
+      "decode_ms": 22.1,
+      "main_ms": 175.5,
+      "model_ms": 502.5,
+      "render_ms": 193.6,
       "store_ms": 0.6
     },
     "compliance_passed": 226,

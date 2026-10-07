@@ -20,14 +20,14 @@ real processes.
 
 | What | Result |
 | --- | --- |
-| Throughput, 1 worker / 2 workers (one per core) | **82 / 162 images per minute** |
-| Work per job inside a worker | ≈ 0.7 s (model 0.49 s, render 0.19 s, decode 0.02 s) |
-| Batching on CPU | measured **no gain** (470 ms per image alone, 476–526 ms in batches), so it is off |
-| Steady load at 70% of capacity | ⟨STEADY⟩ |
-| Worker killed with `SIGKILL` mid-run | ⟨CHAOS⟩ |
-| 300 uploads against a queue limit of 50 | ⟨OVERLOAD⟩ |
-| API alone | ⟨API⟩ |
-| Main images that passed all rules | 480 / 480 in the throughput runs |
+| Throughput, 1 worker / 2 workers (one per core) | **87 / 161 images per minute** |
+| Work per job inside a worker | ≈ 0.7 s (model ≈ 0.48 s, rendering ≈ 0.18 s, decode ≈ 0.02 s) |
+| Steady load, 113 uploads/min (70% of capacity) | end-to-end **p50 725 ms, p99 846 ms** |
+| 4 busy workers killed with `SIGKILL` during a 120-job run | **0 jobs lost**; the 4 in-flight jobs were taken over |
+| 300 uploads at once, queue limit 50 | exactly 50 accepted, 250 fast `503`s, all 50 finished |
+| API alone (32 uploads in flight) | 199 uploads/s, p50 154 ms |
+| Batching on CPU | measured **no gain** (473 ms per image alone, 478–487 ms in batches), so it is off |
+| Main images that passed all Amazon rule checks | 876 / 876 across all runs |
 
 Details and the raw JSON: [BENCHMARKS.md](BENCHMARKS.md). Design and
 trade-offs: [DESIGN.md](DESIGN.md).
@@ -97,17 +97,31 @@ curl -s -X POST http://127.0.0.1:8300/v1/jobs \
 curl -s http://127.0.0.1:8300/v1/jobs/<id>
 ```
 
+A real response (the first job after the worker started, so its caches were still cold):
+
 ```json
 {
-  "job_id": "4f0c…",
+  "job_id": "c500d34c45c0465f8ade70388bbd458f",
   "state": "succeeded",
   "tier": "standard",
+  "model": "u2netp",
   "attempts": 1,
-  "queue_wait_ms": 12,
-  "total_ms": 912,
-  "timings_ms": {"decode_ms": 21.0, "model_ms": 488.0, "render_ms": 410.0, "store_ms": 1.0},
-  "outputs": {"main.jpg": "/v1/jobs/4f0c…/files/main.jpg", "studio-grey.jpg": "…", "studio-warm.jpg": "…"},
-  "compliance": {"passed": true, "checks": {"background_pure_white": true, "…": true}}
+  "queue_wait_ms": 2,
+  "total_ms": 1400,
+  "timings_ms": {"decode_ms": 36.3, "model_ms": 609.1, "render_ms": 751.1, "store_ms": 1.1,
+                 "main_ms": 185.3, "studio_ms": 538.4},
+  "outputs": {
+    "main.jpg": "/v1/jobs/c500d34c45c0465f8ade70388bbd458f/files/main.jpg",
+    "studio-grey.jpg": "/v1/jobs/c500d34c45c0465f8ade70388bbd458f/files/studio-grey.jpg",
+    "studio-warm.jpg": "/v1/jobs/c500d34c45c0465f8ade70388bbd458f/files/studio-warm.jpg"
+  },
+  "compliance": {
+    "passed": true,
+    "checks": {"background_pure_white": true, "product_fills_85_percent_or_more": true,
+               "longest_side_at_least_1000px": true, "square_1_to_1": true, "product_not_cut_off": true},
+    "measurements": {"background_white_ratio": 1.0, "product_fill_ratio": 0.85,
+                     "width_px": 2000.0, "height_px": 2000.0}
+  }
 }
 ```
 
@@ -124,14 +138,15 @@ curl -s http://127.0.0.1:8300/v1/jobs/<id>
 ```bash
 pip install -r requirements-dev.txt
 python scripts/download_models.py
-pytest                               # 27 tests, about 25 s; needs redis-server on PATH
+pytest                               # 30 tests, about 30 s; needs redis-server on PATH
 ```
 
 The integration tests start a real `redis-server` and real worker processes.
 They cover: end-to-end jobs, repeated uploads, idempotency replay and
-conflict, 10 identical requests at the same moment (exactly one job), bad
-uploads, rate limiting, load shedding, retries, the dead-letter queue, and a
-worker that crashes in the middle of a job.
+conflict, 10 identical requests at the same moment (exactly one job, with and
+without an `Idempotency-Key`), an exact queue limit under 20 concurrent
+uploads, bad uploads, rate limiting, load shedding, retries, the dead-letter
+queue, and a worker that crashes in the middle of a job.
 
 ## Benchmarks
 
@@ -157,6 +172,7 @@ snaplist/
 tests/           unit and integration tests
 bench/           benchmark runner and report writer
 scripts/         run script, model download, README example picture
+benchmarks/      raw benchmark results (JSON)
 ```
 
 ## Credits

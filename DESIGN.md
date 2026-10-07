@@ -80,9 +80,9 @@ There are three kinds of process. They scale separately:
 4. **Fingerprint** = SHA-256 of (photo bytes, tier, outputs).
 5. **Idempotency.** Same `Idempotency-Key` + same fingerprint: return the first job (`200`). Same key + different request: `422`, as in the IETF draft for the `Idempotency-Key` header.
 6. **Dedupe.** The same seller uploading the same photo with the same options gets the existing job (`200`, header `X-SnapList-Reused`). Sellers never share results with each other.
-7. **Load shedding.** If the tier already has `max_open_jobs` queued or running jobs, answer `503` with `Retry-After: 5`.
-8. **Claim** the dedupe and idempotency keys with `SET NX`, so ten identical requests at the same moment create exactly one job.
-9. **Store the original photo**, then in one Redis `MULTI` transaction: create the job hash, set its TTL, increment the open-jobs counter, `XADD` to the tier's stream.
+7. **Load shedding, fast path.** If the tier already has `max_open_jobs` queued or running jobs, answer `503` with `Retry-After: 5` before doing any more work.
+8. **Claim** the dedupe and idempotency keys with `SET NX GET`. Ten identical requests at the same moment create exactly one job, and the nine that lose get the winner's job id in the same atomic step. A claim starts as a 60-second lease, so if this API server dies before the job exists, retries are blocked for at most a minute, not a day.
+9. **Store the original photo**, then run one Lua script that re-checks the queue limit and, only if there is room, creates the job hash, sets its TTL, increments the open-jobs counter, adds the job to the tier's stream (`XADD`) and extends the claims to their full lifetime. If the queue filled up in the meantime, the API deletes the photo, releases the claims and answers `503`.
 10. Answer **`202 Accepted`** with a `Location` header pointing at the job.
 
 ### 4.2 In a worker (`snaplist/worker.py`)
@@ -95,7 +95,7 @@ sequenceDiagram
     W->>R: XREADGROUP (or XAUTOCLAIM for stale jobs)
     W->>R: HINCRBY attempts, state = processing
     W->>S: read original photo
-    Note over W: decode, shrink to 2048 px,<br/>model -> mask, clean mask,<br/>compose, encode, check rules
+    Note over W: decode, shrink to 2048 px,<br/>run the model, clean the mask,<br/>compose, encode, check rules
     W->>S: write outputs (atomic replace)
     W->>R: finish script: set final state once, DECR open jobs
     W->>R: XACK
@@ -129,8 +129,8 @@ The mapping to SQS is direct: `XREADGROUP` ≈ `ReceiveMessage`, `XACK` ≈
 
 ### 5.3 One queue per quality tier
 
-The high tier's model (IS-Net) is about 6.4 times slower than the standard
-tier's (U²-Net-p): about 3.0 s against 0.47 s per image. With one shared queue,
+The high tier's model (IS-Net) is about 6 times slower than the standard
+tier's (U²-Net-p): 3.0 s against 0.47 s per image. With one shared queue,
 a standard job could wait behind many slow high-quality jobs (head-of-line
 blocking). Separate streams and separate worker pools keep the standard tier
 fast, and let each pool scale on its own queue depth.
@@ -154,16 +154,20 @@ delivery and makes a second delivery harmless:
 ### 5.6 Load shedding with a bounded queue
 
 An unbounded queue turns overload into very long waits for everybody and
-timeouts at the edge. SnapList keeps an exact open-jobs counter per tier
-(incremented in the enqueue transaction, decremented in the finish script) and
+timeouts at the edge. SnapList keeps an open-jobs counter per tier
+(incremented by the enqueue script, decremented by the finish script) and
 answers `503 + Retry-After` when it is full. A seller's app can retry later,
 and the jobs already accepted still finish on time.
+
+The check runs twice: a cheap read early in the request (so most extra
+requests are refused before anything is written), and the authoritative check
+inside the enqueue script (so the limit is exact). See 5.11 for why.
 
 ### 5.7 Batching: measured, then switched off on CPU
 
 Batching several images into one model call is a common trick on GPUs. On this
-CPU it gave **no gain**: U²-Net-p took 470 ms per image alone, 476–526 ms per
-image in batches of 2, 4 and 8. These convolution models already keep the core
+CPU it gave **no gain**: U²-Net-p took 473 ms per image alone and 478–487 ms
+per image in batches of 2, 4 and 8. These convolution models already keep the core
 fully busy, so batching only adds waiting. The default is `batch_size = 1`.
 The worker still supports dynamic batching (wait up to `batch_wait_ms` to fill
 a batch), because on a GPU it would pay off. To make batching possible at all,
@@ -195,6 +199,24 @@ area, not the whole 2000 × 2000 canvas.
 Both run with ONNX Runtime on one thread per worker. Model files are pinned by
 SHA-256 in `scripts/download_models.py` and baked into the Docker image.
 
+### 5.11 Two race conditions found by testing, and how they were fixed
+
+**Queue limit overshoot.** The first version read the open-jobs counter in the
+API and incremented it later, in the enqueue transaction. Under a burst, many
+requests passed the check before any of them incremented. The overload
+benchmark showed it: **62 jobs accepted with a limit of 50** (32 requests in
+flight at a time). Fix: the check and the increment are now in the same Lua
+script that creates and enqueues the job. Test: 20 uploads at the same moment
+with a limit of 5 must give exactly five `202`s and fifteen `503`s.
+
+**Duplicate jobs for identical uploads.** A new test sent 10 identical uploads
+at the same moment *without* an `Idempotency-Key`, and failed in 2 of 8 runs
+with two jobs. The request that lost the `SET NX` read the winner's job
+record, which did not exist yet (the winner was still saving the photo), and
+treated that as "no job, start a new one". Fix: `SET NX GET` returns the
+winner's id atomically, and a missing record now means "being created right
+now", so the loser returns the winner's job. The test then passed in every run.
+
 ## 6. Failure modes
 
 | What goes wrong | What happens | Proof |
@@ -208,15 +230,17 @@ SHA-256 in `scripts/download_models.py` and baked into the Docker image.
 | Too many uploads at once | `503 + Retry-After` | `test_load_shedding_when_the_queue_is_full`, overload benchmark |
 | One seller sends too fast | `429 + Retry-After` for that seller only | `test_rate_limit_per_seller` |
 | Redis is down | uploads fail with `5xx`; `/health` reports `redis: false` | — |
-| Storing the original fails | dedupe and idempotency keys are released and the file is removed, so a retry works | code in `submit_job` |
+| Storing the original fails, or the queue fills up during the request | the photo is deleted and the claims released, so a retry works | code in `submit_job` |
+| API server dies after claiming a request but before creating the job | the claim was only a 60 s lease, so a retry works a minute later | `CLAIM_LEASE_SECONDS` |
+| Many uploads at once near the queue limit | the limit is exact, checked inside the enqueue script | `test_queue_limit_is_exact_under_concurrent_uploads` |
 
 ## 7. Scaling to 10× and 100×
 
 The numbers come from BENCHMARKS.md.
 
-- **Workers.** One standard worker processes about 90 images a minute on one core (model ≈ 0.5 s, rendering ≈ 0.2 s). Throughput grows with cores, not with processes: 3 workers on 2 cores were no faster than 2. So the rule is one worker per core, and the autoscaler adds workers when `open_jobs / (workers × per-worker rate)` (the expected wait) goes above the target. On Kubernetes that is KEDA on the Redis stream length; on AWS, ECS service auto scaling on a queue-depth metric.
+- **Workers.** One standard worker processes about 87 images a minute on one core (model ≈ 0.5 s, rendering ≈ 0.2 s). Throughput grows with cores, not with processes: 2 workers on 2 cores did 161 a minute, and a third worker on the same 2 cores added nothing (159). So the rule is one worker per core, and the autoscaler adds workers when `open_jobs / (workers × per-worker rate)` (the expected wait) goes above the target. On Kubernetes that is KEDA on the Redis stream length; on AWS, ECS service auto scaling on a queue-depth metric.
 - **API.** Stateless, so add servers behind a load balancer. In production, sellers would upload straight to S3 with a pre-signed URL, so photo bytes never pass through the API.
-- **Redis.** Each job costs about 15 Redis commands. One Redis instance handles tens of thousands of commands per second, so it is not the first bottleneck. Beyond that: shard the streams by seller id, or move the queue to SQS.
+- **Redis.** Each job costs about 10 round trips to Redis: 5 in the API (rate limit, two reads, claim, enqueue script) and 5 in the worker (read, job record, start, finish script, ack), plus status polls. A single Redis instance serves tens of thousands of simple commands per second (an estimate, not measured here), so it is not the first bottleneck. Beyond that: shard the streams by seller id, or move the queue to SQS.
 - **Storage.** Local disk here; S3 in production (same `put/get/exists/delete` interface), with a CDN (CloudFront) in front of the outputs.
 - **GPU for the high tier.** IS-Net is 3 s per image on a CPU core. A GPU is the right tool there, and on a GPU the dynamic batching that is switched off on CPU would help.
 

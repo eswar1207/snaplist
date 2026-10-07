@@ -1,53 +1,59 @@
 {
   "scenario": "chaos_kill_worker",
-  "recorded_at": "2026-10-07T16:36:37+0000",
+  "recorded_at": "2026-10-07T16:56:11+0000",
   "environment": {
     "cpus": 2,
     "ram_gb": 7.8,
     "python": "3.13.16",
     "os": "Linux-6.18.44-fc-v77-x86_64-with-glibc2.39",
     "load_average_at_start": [
-      1.69,
-      2.08,
-      1.38
+      2.64,
+      2.15,
+      1.61
     ]
   },
-  "jobs": 80,
-  "succeeded": 80,
+  "jobs": 120,
+  "succeeded": 120,
   "failed": 0,
-  "images_per_minute": 99.8,
+  "images_per_minute": 156.4,
   "end_to_end_ms": {
-    "p50": 20541.5,
-    "p95": 44872.3,
-    "p99": 47019.0,
-    "max": 47576,
-    "count": 80
+    "p50": 22932.5,
+    "p95": 42906.2,
+    "p99": 44644.5,
+    "max": 45033,
+    "count": 120
   },
   "queue_wait_ms": {
-    "p50": 19849.0,
-    "p95": 44204.4,
-    "p99": 46339.5,
-    "max": 46872,
-    "count": 80
+    "p50": 21787.5,
+    "p95": 42206.8,
+    "p99": 43911.5,
+    "max": 44260,
+    "count": 120
   },
   "stage_median_ms": {
-    "decode_ms": 15.8,
-    "main_ms": 169.5,
-    "model_ms": 481.2,
-    "render_ms": 185.6,
+    "decode_ms": 20.7,
+    "main_ms": 175.4,
+    "model_ms": 495.8,
+    "render_ms": 195.0,
     "store_ms": 0.6
   },
-  "compliance_passed": 80,
-  "jobs_with_retries": 1,
+  "compliance_passed": 120,
+  "jobs_with_retries": 4,
   "visibility_timeout_ms": 5000,
-  "worker_killed_after_ms": 8517,
-  "jobs_taken_over": 1,
+  "workers_killed": 4,
+  "kill_times_after_first_upload_s": [
+    9.0,
+    17.6,
+    26.0,
+    34.6
+  ],
+  "jobs_taken_over": 4,
   "taken_over_end_to_end_ms": {
-    "p50": 14286.0,
-    "p95": 14286.0,
-    "p99": 14286.0,
-    "max": 14286,
-    "count": 1
+    "p50": 27008.5,
+    "p95": 38257.8,
+    "p99": 39274.0,
+    "max": 39528,
+    "count": 4
   },
   "lost_jobs": 0,
   "pending_after_run": 0

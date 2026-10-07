@@ -1,64 +1,64 @@
 {
   "scenario": "overload",
-  "recorded_at": "2026-10-07T16:37:41+0000",
+  "recorded_at": "2026-10-07T16:57:08+0000",
   "environment": {
     "cpus": 2,
     "ram_gb": 7.8,
     "python": "3.13.16",
     "os": "Linux-6.18.44-fc-v77-x86_64-with-glibc2.39",
     "load_average_at_start": [
-      1.36,
-      1.91,
-      1.37
+      1.64,
+      1.94,
+      1.57
     ]
   },
   "burst": 300,
   "max_open_jobs": 50,
   "workers": 1,
-  "accepted": 62,
-  "rejected_503": 238,
+  "accepted": 50,
+  "rejected_503": 250,
   "other_status": [],
   "accepted_upload_ms": {
-    "p50": 177.1,
-    "p95": 242.8,
-    "p99": 268.1,
-    "max": 276.5,
-    "count": 62
+    "p50": 182.5,
+    "p95": 259.5,
+    "p99": 281.7,
+    "max": 286.9,
+    "count": 50
   },
   "rejected_upload_ms": {
-    "p50": 75.3,
-    "p95": 105.8,
-    "p99": 119.2,
-    "max": 134.5,
-    "count": 238
+    "p50": 75.7,
+    "p95": 126.6,
+    "p99": 184.6,
+    "max": 219.4,
+    "count": 250
   },
   "accepted_jobs": {
-    "jobs": 62,
-    "succeeded": 62,
+    "jobs": 50,
+    "succeeded": 50,
     "failed": 0,
-    "images_per_minute": 89.4,
+    "images_per_minute": 86.8,
     "end_to_end_ms": {
-      "p50": 21055.5,
-      "p95": 39331.5,
-      "p99": 40983.9,
-      "max": 41331,
-      "count": 62
+      "p50": 17931.5,
+      "p95": 32789.5,
+      "p99": 34072.0,
+      "max": 34391,
+      "count": 50
     },
     "queue_wait_ms": {
-      "p50": 20408.5,
-      "p95": 38643.2,
-      "p99": 40297.2,
-      "max": 40676,
-      "count": 62
+      "p50": 17189.0,
+      "p95": 32126.9,
+      "p99": 33409.9,
+      "max": 33698,
+      "count": 50
     },
     "stage_median_ms": {
-      "decode_ms": 6.4,
-      "main_ms": 159.4,
-      "model_ms": 483.1,
-      "render_ms": 166.2,
-      "store_ms": 0.5
+      "decode_ms": 6.3,
+      "main_ms": 166.6,
+      "model_ms": 494.2,
+      "render_ms": 173.7,
+      "store_ms": 0.6
     },
-    "compliance_passed": 62,
+    "compliance_passed": 50,
     "jobs_with_retries": 0
   }
 }
