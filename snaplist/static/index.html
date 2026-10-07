@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SnapList</title>
+<style>
+  :root { --ink:#1b1f24; --muted:#5b6470; --line:#d9dde3; --accent:#c45a00; --ok:#1a7f37; --bad:#b42318; --bg:#f6f7f9; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; color:var(--ink); background:var(--bg); }
+  main { max-width: 1040px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  p.lead { color: var(--muted); margin: 0 0 20px; }
+  form { display:grid; gap:12px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); align-items:end;
+         background:#fff; border:1px solid var(--line); border-radius:10px; padding:16px; }
+  label { display:grid; gap:4px; font-size:14px; color:var(--muted); }
+  input, select, button { font:inherit; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:#fff; }
+  fieldset { border:1px solid var(--line); border-radius:8px; padding:6px 10px; display:flex; gap:12px; font-size:14px; }
+  button { background:var(--accent); color:#fff; border:none; cursor:pointer; font-weight:600; }
+  button:disabled { opacity:.6; cursor:wait; }
+  #status { margin:16px 0; color:var(--muted); min-height:24px; }
+  .grid { display:grid; gap:12px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+  figure { margin:0; background:#fff; border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  figure img, figure video { width:100%; display:block; aspect-ratio:1/1; object-fit:contain; background:#eceff3; }
+  figcaption { padding:8px 10px; font-size:14px; display:flex; justify-content:space-between; gap:8px; }
+  ul.checks { list-style:none; padding:0; margin:12px 0 0; display:grid; gap:4px; font-size:14px; }
+  .pass { color:var(--ok); } .fail { color:var(--bad); }
+</style>
+</head>
+<body>
+<main>
+  <h1>SnapList</h1>
+  <p class="lead">Upload a phone photo of a product. SnapList returns an Amazon-ready main image (pure white background, product filling about 85% of a 2000&times;2000 px frame) plus optional studio shots, a transparent cut-out and a short B-roll clip.</p>
+  <form id="form">
+    <label>Seller ID <input name="seller" value="demo-seller" required></label>
+    <label>Photo <input name="image" type="file" accept="image/jpeg,image/png,image/webp" required></label>
+    <label>Quality
+      <select name="tier"><option value="standard">Standard (fast)</option><option value="high">High (cleaner edges)</option></select>
+    </label>
+    <fieldset><legend>Extras</legend>
+      <label><input type="checkbox" name="extra" value="studio" checked> Studio</label>
+      <label><input type="checkbox" name="extra" value="cutout"> Cut-out</label>
+      <label><input type="checkbox" name="extra" value="video"> Video</label>
+    </fieldset>
+    <button id="submit">Create listing images</button>
+  </form>
+  <div id="status" role="status" aria-live="polite"></div>
+  <div id="results" class="grid"></div>
+  <ul id="checks" class="checks"></ul>
+</main>
+<script>
+const form = document.getElementById("form");
+const statusEl = document.getElementById("status");
+const results = document.getElementById("results");
+const checks = document.getElementById("checks");
+
+function figure(url, caption) {
+  const fig = document.createElement("figure");
+  const media = document.createElement(url.endsWith(".mp4") ? "video" : "img");
+  media.src = url;
+  if (media.tagName === "VIDEO") { media.controls = true; media.loop = true; media.muted = true; media.autoplay = true; }
+  else { media.alt = caption; }
+  const cap = document.createElement("figcaption");
+  const name = document.createElement("span"); name.textContent = caption;
+  const link = document.createElement("a"); link.href = url; link.textContent = "Download"; link.download = "";
+  cap.append(name, link);
+  fig.append(media, cap);
+  return fig;
+}
+
+async function poll(statusUrl) {
+  for (;;) {
+    const job = await (await fetch(statusUrl)).json();
+    statusEl.textContent = `Job ${job.job_id.slice(0, 8)}: ${job.state}` + (job.total_ms ? ` in ${(job.total_ms / 1000).toFixed(1)} s` : "");
+    if (job.state === "succeeded" || job.state === "failed") return job;
+    await new Promise(r => setTimeout(r, 600));
+  }
+}
+
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const data = new FormData(form);
+  const body = new FormData();
+  body.append("image", data.get("image"));
+  body.append("tier", data.get("tier"));
+  body.append("outputs", data.getAll("extra").join(","));
+  results.replaceChildren(); checks.replaceChildren();
+  document.getElementById("submit").disabled = true;
+  statusEl.textContent = "Uploading...";
+  try {
+    const response = await fetch("/v1/jobs", {
+      method: "POST", body,
+      headers: { "X-Seller-Id": data.get("seller"), "Idempotency-Key": crypto.randomUUID().replaceAll("-", "") },
+    });
+    const accepted = await response.json();
+    if (!response.ok) { statusEl.textContent = `Rejected (${response.status}): ${accepted.detail}`; return; }
+    const job = await poll(accepted.status_url);
+    if (job.state === "failed") { statusEl.textContent += ` - ${job.error}`; return; }
+    results.append(figure(job.original_url, "Original photo"));
+    for (const [name, url] of Object.entries(job.outputs)) results.append(figure(url, name));
+    for (const [check, ok] of Object.entries(job.compliance.checks)) {
+      const li = document.createElement("li");
+      li.className = ok ? "pass" : "fail";
+      li.textContent = `${ok ? "✓" : "✗"} ${check.replaceAll("_", " ")}`;
+      checks.append(li);
+    }
+  } catch (error) {
+    statusEl.textContent = `Error: ${error}`;
+  } finally {
+    document.getElementById("submit").disabled = false;
+  }
+});
+</script>
+</body>
+</html>
