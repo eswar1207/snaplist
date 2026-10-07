@@ -1,0 +1,172 @@
+{
+  "scenario": "throughput",
+  "recorded_at": "2026-10-07T16:32:40+0000",
+  "environment": {
+    "cpus": 2,
+    "ram_gb": 7.8,
+    "python": "3.13.16",
+    "os": "Linux-6.18.44-fc-v77-x86_64-with-glibc2.39",
+    "load_average_at_start": [
+      3.54,
+      2.24,
+      1.21
+    ]
+  },
+  "jobs_per_run": 120,
+  "photo_size": "1600x1200 JPEG",
+  "runs": [
+    {
+      "workers": 1,
+      "outputs": "main",
+      "upload_ms": {
+        "p50": 79.1,
+        "p95": 152.0,
+        "p99": 176.8,
+        "max": 179.9,
+        "count": 120
+      },
+      "jobs": 120,
+      "succeeded": 120,
+      "failed": 0,
+      "images_per_minute": 82.0,
+      "end_to_end_ms": {
+        "p50": 44019.5,
+        "p95": 82941.9,
+        "p99": 86420.4,
+        "max": 87276,
+        "count": 120
+      },
+      "queue_wait_ms": {
+        "p50": 43257.5,
+        "p95": 81756.9,
+        "p99": 85706.2,
+        "max": 86559,
+        "count": 120
+      },
+      "stage_median_ms": {
+        "decode_ms": 21.2,
+        "main_ms": 176.8,
+        "model_ms": 492.0,
+        "render_ms": 192.2,
+        "store_ms": 0.5
+      },
+      "compliance_passed": 120,
+      "jobs_with_retries": 0
+    },
+    {
+      "workers": 2,
+      "outputs": "main",
+      "upload_ms": {
+        "p50": 105.3,
+        "p95": 179.8,
+        "p99": 208.3,
+        "max": 209.8,
+        "count": 120
+      },
+      "jobs": 120,
+      "succeeded": 120,
+      "failed": 0,
+      "images_per_minute": 161.6,
+      "end_to_end_ms": {
+        "p50": 22424.0,
+        "p95": 41605.4,
+        "p99": 43374.0,
+        "max": 43796,
+        "count": 120
+      },
+      "queue_wait_ms": {
+        "p50": 21710.5,
+        "p95": 40856.8,
+        "p99": 42649.2,
+        "max": 43095,
+        "count": 120
+      },
+      "stage_median_ms": {
+        "decode_ms": 21.2,
+        "main_ms": 177.1,
+        "model_ms": 498.4,
+        "render_ms": 196.9,
+        "store_ms": 0.6
+      },
+      "compliance_passed": 120,
+      "jobs_with_retries": 0
+    },
+    {
+      "workers": 3,
+      "outputs": "main",
+      "upload_ms": {
+        "p50": 107.5,
+        "p95": 162.0,
+        "p99": 189.9,
+        "max": 205.0,
+        "count": 120
+      },
+      "jobs": 120,
+      "succeeded": 120,
+      "failed": 0,
+      "images_per_minute": 159.3,
+      "end_to_end_ms": {
+        "p50": 23173.5,
+        "p95": 42315.7,
+        "p99": 44158.1,
+        "max": 44430,
+        "count": 120
+      },
+      "queue_wait_ms": {
+        "p50": 21993.0,
+        "p95": 41419.7,
+        "p99": 43215.9,
+        "max": 43589,
+        "count": 120
+      },
+      "stage_median_ms": {
+        "decode_ms": 32.7,
+        "main_ms": 225.5,
+        "model_ms": 789.4,
+        "render_ms": 261.1,
+        "store_ms": 0.6
+      },
+      "compliance_passed": 120,
+      "jobs_with_retries": 0
+    },
+    {
+      "workers": 2,
+      "outputs": "main+studio",
+      "upload_ms": {
+        "p50": 140.6,
+        "p95": 198.4,
+        "p99": 217.6,
+        "max": 231.5,
+        "count": 120
+      },
+      "jobs": 120,
+      "succeeded": 120,
+      "failed": 0,
+      "images_per_minute": 121.2,
+      "end_to_end_ms": {
+        "p50": 30114.0,
+        "p95": 55647.4,
+        "p99": 58120.5,
+        "max": 58443,
+        "count": 120
+      },
+      "queue_wait_ms": {
+        "p50": 29109.5,
+        "p95": 54724.6,
+        "p99": 57149.4,
+        "max": 57559,
+        "count": 120
+      },
+      "stage_median_ms": {
+        "decode_ms": 16.3,
+        "main_ms": 172.9,
+        "model_ms": 504.8,
+        "render_ms": 436.6,
+        "store_ms": 1.2,
+        "studio_ms": 242.6
+      },
+      "compliance_passed": 120,
+      "jobs_with_retries": 0
+    }
+  ]
+}

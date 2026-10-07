@@ -1,0 +1,55 @@
+{
+  "scenario": "model_only",
+  "recorded_at": "2026-10-07T16:16:15+0000",
+  "environment": {
+    "cpus": 2,
+    "ram_gb": 7.8,
+    "python": "3.13.16",
+    "os": "Linux-6.18.44-fc-v77-x86_64-with-glibc2.39",
+    "load_average_at_start": [
+      0.76,
+      0.35,
+      0.18
+    ]
+  },
+  "threads": 1,
+  "image_size": "1600x1200",
+  "rows": [
+    {
+      "model": "u2netp",
+      "batch_size": 1,
+      "median_batch_ms": 470.1,
+      "ms_per_image": 470.1
+    },
+    {
+      "model": "u2netp",
+      "batch_size": 2,
+      "median_batch_ms": 1052.5,
+      "ms_per_image": 526.2
+    },
+    {
+      "model": "u2netp",
+      "batch_size": 4,
+      "median_batch_ms": 1904.2,
+      "ms_per_image": 476.0
+    },
+    {
+      "model": "u2netp",
+      "batch_size": 8,
+      "median_batch_ms": 3941.0,
+      "ms_per_image": 492.6
+    },
+    {
+      "model": "isnet-general-use",
+      "batch_size": 1,
+      "median_batch_ms": 3024.6,
+      "ms_per_image": 3024.6
+    },
+    {
+      "model": "isnet-general-use",
+      "batch_size": 2,
+      "median_batch_ms": 6314.9,
+      "ms_per_image": 3157.4
+    }
+  ]
+}
