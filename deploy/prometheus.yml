@@ -1,0 +1,10 @@
+global:
+  scrape_interval: 5s
+scrape_configs:
+  - job_name: snaplist-api
+    static_configs: [{targets: ["api:8300"]}]
+  - job_name: snaplist-workers
+    dns_sd_configs:
+      - names: [worker-standard, worker-high]
+        type: A
+        port: 9101

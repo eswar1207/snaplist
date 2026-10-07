@@ -1,0 +1,45 @@
+# Full stack on one machine:  docker compose up --build
+# Web page: http://localhost:8300   Prometheus: http://localhost:9090
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]   # keep jobs if Redis restarts
+    volumes: [redis-data:/data]
+
+  api:
+    build: .
+    ports: ["8300:8300"]
+    environment:
+      SNAPLIST_REDIS_URL: redis://redis:6379/0
+    volumes: [images:/data]
+    depends_on: [redis]
+
+  worker-standard:   # fast tier: scale with  docker compose up --scale worker-standard=4
+    build: .
+    command: ["python", "-m", "snaplist.worker", "--tier", "standard", "--metrics-port", "9101"]
+    environment:
+      SNAPLIST_REDIS_URL: redis://redis:6379/0
+    volumes: [images:/data]
+    depends_on: [redis]
+    deploy:
+      replicas: 2
+    stop_grace_period: 30s   # let a worker finish its current job on shutdown
+
+  worker-high:       # slow, high-quality tier has its own queue and workers
+    build: .
+    command: ["python", "-m", "snaplist.worker", "--tier", "high", "--metrics-port", "9101"]
+    environment:
+      SNAPLIST_REDIS_URL: redis://redis:6379/0
+    volumes: [images:/data]
+    depends_on: [redis]
+    stop_grace_period: 30s
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes: ["./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+    ports: ["9090:9090"]
+    depends_on: [api]
+
+volumes:
+  redis-data:
+  images:
