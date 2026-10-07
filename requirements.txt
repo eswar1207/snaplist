@@ -1,0 +1,11 @@
+fastapi==0.142.2
+uvicorn[standard]==0.54.0
+python-multipart==0.0.32
+redis[hiredis]==8.1.0
+onnxruntime==1.30.0
+onnx==1.23.2
+numpy==2.5.3
+opencv-python-headless==5.0.0.93
+pillow==12.3.0
+prometheus-client==0.26.0
+imageio-ffmpeg==0.6.0
