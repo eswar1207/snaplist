@@ -5,13 +5,13 @@ Tokens come back at `per_minute / 60` per second. When the bucket is empty the
 API answers 429 with a Retry-After header.
 
 The check runs as one Lua script, so it is atomic even with many API servers
-sharing the same Redis.
+sharing the same Redis. The clock is Redis's own (TIME), so API servers whose
+clocks differ a little still agree on how many tokens a seller has.
 """
 
 from __future__ import annotations
 
 import math
-import time
 from dataclasses import dataclass
 
 import redis
@@ -20,11 +20,12 @@ _TOKEN_BUCKET = """
 local key = KEYS[1]
 local capacity = tonumber(ARGV[1])
 local refill_per_ms = tonumber(ARGV[2])
-local now = tonumber(ARGV[3])
+local clock = redis.call('TIME')
+local now = tonumber(clock[1]) * 1000 + math.floor(tonumber(clock[2]) / 1000)
 local bucket = redis.call('HMGET', key, 'tokens', 'ts')
 local tokens = tonumber(bucket[1]) or capacity
 local ts = tonumber(bucket[2]) or now
-tokens = math.min(capacity, tokens + (now - ts) * refill_per_ms)
+tokens = math.min(capacity, tokens + math.max(0, now - ts) * refill_per_ms)
 local allowed = 0
 if tokens >= 1 then
   tokens = tokens - 1
@@ -49,10 +50,9 @@ class TokenBucketLimiter:
         self._script = client.register_script(_TOKEN_BUCKET)
 
     def check(self, seller_id: str) -> RateDecision:
-        now_ms = int(time.time() * 1000)
         allowed, tokens = self._script(
             keys=[f"snaplist:ratelimit:{seller_id}"],
-            args=[self.burst, self.refill_per_ms, now_ms],
+            args=[self.burst, self.refill_per_ms],
         )
         if allowed:
             return RateDecision(True, 0)

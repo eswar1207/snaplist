@@ -66,7 +66,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response: Response,
         image: UploadFile = File(..., description="Product photo (JPEG, PNG or WEBP)"),
         tier: str = Form("standard", description="standard (fast) or high (cleaner edges, slower)"),
-        outputs: str = Form("studio", description="extra outputs: any of studio, cutout, video"),
+        # Empty means "main image only". (FastAPI also treats an empty form field
+        # as missing, so the default must be the same as an empty value.)
+        outputs: str = Form("", description="extra outputs, comma separated: any of studio, cutout, video"),
         fault: str | None = Form(None, description="test-only fault injection"),
         x_seller_id: str = Header(..., description="Seller account id"),
         idempotency_key: str | None = Header(None),

@@ -35,6 +35,14 @@ def test_job_runs_end_to_end(make_client, run_worker):
     assert client.get("/v1/stats").json()["tiers"]["standard"]["open_jobs"] == 0
 
 
+def test_only_the_main_image_is_made_unless_extras_are_asked_for(make_client, run_worker):
+    client = make_client()
+    run_worker()
+    job_id = submit(client, photo_bytes(seed=7), outputs="").json()["job_id"]
+    job = wait_for_state(client, job_id, {"succeeded", "failed"})
+    assert set(job["outputs"]) == {"main.jpg"}
+
+
 def test_same_photo_twice_reuses_the_first_job(make_client):
     client = make_client()
     first = submit(client, photo_bytes(seed=2))
@@ -87,11 +95,11 @@ def test_rate_limit_per_seller(make_client):
 
 
 def test_token_bucket_refills(redis_client):
-    limiter = TokenBucketLimiter(redis_client, burst=2, per_minute=60_000)  # 1000 tokens/second
-    assert limiter.check("s").allowed and limiter.check("s").allowed
-    assert not limiter.check("s").allowed
-    time.sleep(0.01)
-    assert limiter.check("s").allowed
+    limiter = TokenBucketLimiter(redis_client, burst=2, per_minute=600)  # one token every 100 ms
+    assert limiter.check("refill").allowed and limiter.check("refill").allowed
+    assert not limiter.check("refill").allowed
+    time.sleep(0.15)
+    assert limiter.check("refill").allowed
 
 
 def test_load_shedding_when_the_queue_is_full(make_client):
